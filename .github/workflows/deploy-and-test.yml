@@ -16,21 +16,22 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.9'  # Version stable et compatible
 
       - name: Install Dependencies
         run: |
-          # Installation du CLI LocalStack (fournit la commande 'awslocal') et boto3
-          pip install localstack-cli boto3
-          # Installation du serveur LocalStack complet
-          pip install localstack[full]
+          # On installe le paquet localstack complet qui contient tout
+          pip install localstack boto3
+          # On s'assure que le binaire 'localstack' est dans le PATH
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Start LocalStack
         run: |
           echo "Démarrage de LocalStack..."
+          # On lance localstack en mode daemon
           localstack start -d
           
-          # Attente active avec timeout
+          # Attente active
           max_attempts=40
           attempt=0
           while [ $attempt -lt $max_attempts ]; do
@@ -53,19 +54,19 @@ jobs:
           aws configure set aws_access_key_id test
           aws configure set aws_secret_access_key test
           aws configure set region us-east-1
-          # Important : Pointer vers l'endpoint LocalStack
+          # On pointe vers l'endpoint LocalStack
           export AWS_ENDPOINT_URL=http://localhost:4566
 
       - name: Setup IAM Role
         run: |
-          # Création du rôle
-          awslocal iam create-role --role-name lambda-ec2-role --assume-role-policy-document '{
+          # On utilise 'localstack' qui agit comme 'awslocal'
+          # La commande 'localstack' expose les mêmes commandes que 'awslocal'
+          localstack iam create-role --role-name lambda-ec2-role --assume-role-policy-document '{
             "Version": "2012-10-17",
             "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]
           }'
           
-          # Ajout de la politique
-          awslocal iam put-role-policy --role-name lambda-ec2-role --policy-name ec2-permissions --policy-document '{
+          localstack iam put-role-policy --role-name lambda-ec2-role --policy-name ec2-permissions --policy-document '{
             "Version": "2012-10-17",
             "Statement": [{"Effect": "Allow", "Action": ["ec2:*", "logs:*"], "Resource": "*"}]
           }'
@@ -77,7 +78,7 @@ jobs:
           zip -r ../function.zip lambda_function.py
           cd ..
           
-          awslocal lambda create-function \
+          localstack lambda create-function \
             --function-name ec2-controller \
             --runtime python3.9 \
             --handler lambda_function.lambda_handler \
@@ -89,25 +90,20 @@ jobs:
       - name: Deploy API Gateway
         run: |
           # Création de l'API
-          API_ID=$(awslocal apigateway create-rest-api --name ec2-api --description "API EC2 Controller" --query 'id' --output text)
+          API_ID=$(localstack apigateway create-rest-api --name ec2-api --description "API EC2 Controller" --query 'id' --output text)
           echo "API ID: $API_ID"
           
-          # Récupération de l'ID de la ressource racine
-          ROOT_ID=$(awslocal apigateway get-resources --rest-api-id $API_ID --query 'items[0].id' --output text)
+          ROOT_ID=$(localstack apigateway get-resources --rest-api-id $API_ID --query 'items[0].id' --output text)
+          RESOURCE_ID=$(localstack apigateway create-resource --rest-api-id $API_ID --parent-id $ROOT_ID --path-part control --query 'id' --output text)
           
-          # Création de la ressource "/control"
-          RESOURCE_ID=$(awslocal apigateway create-resource --rest-api-id $API_ID --parent-id $ROOT_ID --path-part control --query 'id' --output text)
-          
-          # Configuration de la méthode POST
-          awslocal apigateway put-method \
+          localstack apigateway put-method \
             --rest-api-id $API_ID \
             --resource-id $RESOURCE_ID \
             --http-method POST \
             --authorization-type NONE \
             --request-in '{"application/json": ""}'
           
-          # Intégration avec Lambda
-          awslocal apigateway put-integration \
+          localstack apigateway put-integration \
             --rest-api-id $API_ID \
             --resource-id $RESOURCE_ID \
             --http-method POST \
@@ -115,17 +111,15 @@ jobs:
             --integration-http-method POST \
             --uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:ec2-controller/invocations"
           
-          # Déploiement de l'API
-          awslocal apigateway create-deployment --rest-api-id $API_ID --stage-name dev
+          localstack apigateway create-deployment --rest-api-id $API_ID --stage-name dev
           
-          # Export des variables pour les étapes suivantes
           echo "API_ID=$API_ID" >> $GITHUB_ENV
           echo "API_URL=https://$API_ID.execute-api.us-east-1.localhost.localstack.cloud/dev/control" >> $GITHUB_ENV
           echo "API Gateway déployée à: $API_URL"
 
       - name: Create Test EC2 Instance
         run: |
-          INSTANCE_ID=$(awslocal ec2 run-instances --image-id ami-12c6146b --count 1 --instance-type t2.micro --query 'Instances[0].InstanceId' --output text)
+          INSTANCE_ID=$(localstack ec2 run-instances --image-id ami-12c6146b --count 1 --instance-type t2.micro --query 'Instances[0].InstanceId' --output text)
           echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
           echo "Instance créée: $INSTANCE_ID"
 
@@ -137,8 +131,7 @@ jobs:
             -d "{\"action\": \"start\", \"instance_id\": \"${{ env.INSTANCE_ID }}\"}")
           echo "Réponse API: $RESPONSE"
           
-          # Vérification simple
-          STATE=$(awslocal ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
+          STATE=$(localstack ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
           echo "État de l'instance: $STATE"
 
       - name: Test API - Stop Instance
@@ -149,15 +142,15 @@ jobs:
             -d "{\"action\": \"stop\", \"instance_id\": \"${{ env.INSTANCE_ID }}\"}")
           echo "Réponse API: $RESPONSE"
           
-          STATE=$(awslocal ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
+          STATE=$(localstack ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
           echo "État de l'instance: $STATE"
 
       - name: Cleanup
         if: always()
         run: |
           echo "Nettoyage des ressources..."
-          awslocal ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }} || true
-          awslocal lambda delete-function --function-name ec2-controller || true
-          awslocal apigateway delete-rest-api --rest-api-id ${{ env.API_ID }} || true
-          awslocal iam delete-role --role-name lambda-ec2-role || true
+          localstack ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }} || true
+          localstack lambda delete-function --function-name ec2-controller || true
+          localstack apigateway delete-rest-api --rest-api-id ${{ env.API_ID }} || true
+          localstack iam delete-role --role-name lambda-ec2-role || true
           echo "Nettoyage terminé."
