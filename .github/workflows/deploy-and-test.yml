@@ -33,7 +33,7 @@ jobs:
             -p 4510-4559:4510-4559 \
             -e LOCALSTACK_API_KEY="" \
             -e SERVICES="ec2,lambda,apigateway,iam,logs" \
-            localstack/localstack:community
+            localstack/localstack:3
           
           # Attente active du port 4566
           max_attempts=60
