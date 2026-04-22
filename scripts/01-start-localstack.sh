@@ -9,7 +9,7 @@ echo "=========================================="
 localstack start -d
 
 # Attendre que LocalStack soit prêt
-max_attempts=60
+max_attempts=10
 attempt=0
 while [ $attempt -lt $max_attempts ]; do
   if curl -s http://localhost:4566/_localstack/health | grep -q '"running"'; then
