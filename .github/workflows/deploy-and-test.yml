@@ -1,161 +1,41 @@
-name: Deploy EC2 API with LocalStack
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-
-      - name: Install AWS CLI
-        run: |
-          pip install awscli-local boto3
-          # awslocal est fourni par awscli-local
-
       - name: Start LocalStack via Docker
         run: |
-          echo "Démarrage de LocalStack via Docker..."
-          # On lance le conteneur LocalStack en arrière-plan
+          echo "Démarrage de LocalStack (Pro Edition)..."
+          
+          # Lancer le conteneur avec le token Pro
           docker run -d \
             --name localstack \
             -p 4566:4566 \
             -p 4510-4559:4510-4559 \
-            -e LOCALSTACK_API_KEY="" \
+            -e LOCALSTACK_API_KEY="${{ secrets.LOCALSTACK_API_KEY }}" \
             -e SERVICES="ec2,lambda,apigateway,iam,logs" \
-            localstack/localstack:3
+            localstack/localstack:latest
           
-          # Attente active du port 4566
+          # Attendre que le conteneur soit prêt
+          echo "Attente du démarrage..."
+          sleep 15
+          
+          # Affichage des logs pour debug
+          echo "--- Logs initiaux ---"
+          docker logs localstack --tail 30
+          
+          # Boucle d'attente robuste
           max_attempts=60
           attempt=0
           while [ $attempt -lt $max_attempts ]; do
-            if curl -s http://localhost:4566/_localstack/health | grep -q '"running"'; then
+            # Vérification du port et du health endpoint
+            if curl -s --connect-timeout 2 http://localhost:4566/_localstack/health | grep -q '"running"'; then
               echo "✅ LocalStack est prêt !"
               break
             fi
-            echo "Tentative $((attempt+1))/$max_attempts : En attente du port 4566..."
-            sleep 2
+            echo "Tentative $((attempt+1))/$max_attempts : En attente..."
+            sleep 3
             attempt=$((attempt+1))
           done
           
           if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Échec : LocalStack n'est pas prêt après 2 minutes."
+            echo "❌ Échec : LocalStack n'est pas prêt."
+            echo "--- Logs complets ---"
             docker logs localstack
             exit 1
           fi
-
-      - name: Configure AWS Credentials
-        run: |
-          aws configure set aws_access_key_id test
-          aws configure set aws_secret_access_key test
-          aws configure set region us-east-1
-          # Pointe vers l'endpoint LocalStack
-          export AWS_ENDPOINT_URL=http://localhost:4566
-
-      - name: Setup IAM Role
-        run: |
-          awslocal iam create-role --role-name lambda-ec2-role --assume-role-policy-document '{
-            "Version": "2012-10-17",
-            "Statement": [{"Effect": "Allow", "Principal": {"Service": "lambda.amazonaws.com"}, "Action": "sts:AssumeRole"}]
-          }'
-          
-          awslocal iam put-role-policy --role-name lambda-ec2-role --policy-name ec2-permissions --policy-document '{
-            "Version": "2012-10-17",
-            "Statement": [{"Effect": "Allow", "Action": ["ec2:*", "logs:*"], "Resource": "*"}]
-          }'
-          echo "Rôle IAM créé."
-
-      - name: Deploy Lambda Function
-        run: |
-          cd src
-          zip -r ../function.zip lambda_function.py
-          cd ..
-          
-          awslocal lambda create-function \
-            --function-name ec2-controller \
-            --runtime python3.9 \
-            --handler lambda_function.lambda_handler \
-            --role arn:aws:iam::000000000000:role/lambda-ec2-role \
-            --zip-file fileb://function.zip \
-            --region us-east-1
-          echo "Fonction Lambda déployée."
-
-      - name: Deploy API Gateway
-        run: |
-          API_ID=$(awslocal apigateway create-rest-api --name ec2-api --description "API EC2 Controller" --query 'id' --output text)
-          echo "API ID: $API_ID"
-          
-          ROOT_ID=$(awslocal apigateway get-resources --rest-api-id $API_ID --query 'items[0].id' --output text)
-          RESOURCE_ID=$(awslocal apigateway create-resource --rest-api-id $API_ID --parent-id $ROOT_ID --path-part control --query 'id' --output text)
-          
-          awslocal apigateway put-method \
-            --rest-api-id $API_ID \
-            --resource-id $RESOURCE_ID \
-            --http-method POST \
-            --authorization-type NONE \
-            --request-in '{"application/json": ""}'
-          
-          awslocal apigateway put-integration \
-            --rest-api-id $API_ID \
-            --resource-id $RESOURCE_ID \
-            --http-method POST \
-            --type AWS_PROXY \
-            --integration-http-method POST \
-            --uri "arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:ec2-controller/invocations"
-          
-          awslocal apigateway create-deployment --rest-api-id $API_ID --stage-name dev
-          
-          echo "API_ID=$API_ID" >> $GITHUB_ENV
-          echo "API_URL=https://$API_ID.execute-api.us-east-1.localhost.localstack.cloud/dev/control" >> $GITHUB_ENV
-          echo "API Gateway déployée à: $API_URL"
-
-      - name: Create Test EC2 Instance
-        run: |
-          INSTANCE_ID=$(awslocal ec2 run-instances --image-id ami-12c6146b --count 1 --instance-type t2.micro --query 'Instances[0].InstanceId' --output text)
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "Instance créée: $INSTANCE_ID"
-
-      - name: Test API - Start Instance
-        run: |
-          echo "Test: Démarrage de l'instance..."
-          RESPONSE=$(curl -s -X POST ${{ env.API_URL }} \
-            -H "Content-Type: application/json" \
-            -d "{\"action\": \"start\", \"instance_id\": \"${{ env.INSTANCE_ID }}\"}")
-          echo "Réponse API: $RESPONSE"
-          
-          STATE=$(awslocal ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
-          echo "État de l'instance: $STATE"
-
-      - name: Test API - Stop Instance
-        run: |
-          echo "Test: Arrêt de l'instance..."
-          RESPONSE=$(curl -s -X POST ${{ env.API_URL }} \
-            -H "Content-Type: application/json" \
-            -d "{\"action\": \"stop\", \"instance_id\": \"${{ env.INSTANCE_ID }}\"}")
-          echo "Réponse API: $RESPONSE"
-          
-          STATE=$(awslocal ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} --query 'Reservations[0].Instances[0].State.Name' --output text)
-          echo "État de l'instance: $STATE"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          echo "Nettoyage des ressources..."
-          awslocal ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }} || true
-          awslocal lambda delete-function --function-name ec2-controller || true
-          awslocal apigateway delete-rest-api --rest-api-id ${{ env.API_ID }} || true
-          awslocal iam delete-role --role-name lambda-ec2-role || true
-          # Arrêt du conteneur Docker
-          docker stop localstack || true
-          docker rm localstack || true
-          echo "Nettoyage terminé."
