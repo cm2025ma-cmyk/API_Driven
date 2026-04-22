@@ -26,20 +26,22 @@ jobs:
           pip install localstack boto3 awscli-local
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Start LocalStack (Pro Mode)  # <--- UNIQUEMENT CE BLOC DOIT EXISTER
+      - name: Start LocalStack (Community Mode)
         env:
-          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_API_KEY }}
+          LOCALSTACK_ACTIVATE_PRO: "0"
         run: |
-          echo "🚀 Démarrage de LocalStack en mode Pro..."
+          echo "🚀 Démarrage de LocalStack en mode Community..."
+          
+          # Image Community publique (pas besoin de token)
           docker run -d \
             --name localstack \
             -p 4566:4566 \
             -p 4510-4559:4510-4559 \
-            -e LOCALSTACK_AUTH_TOKEN=${{ secrets.LOCALSTACK_API_KEY }} \
-            localstack/pro-local:2026.3.0
-            
+            -e LOCALSTACK_ACTIVATE_PRO=0 \
+            localstack/localstack:latest
+          
           # Attente de la santé
-          max_attempts=90
+          max_attempts=60
           attempt=0
           while [ $attempt -lt $max_attempts ]; do
             if curl -s http://localhost:4566/_localstack/health | grep -q '"running"'; then
@@ -56,6 +58,7 @@ jobs:
             docker logs localstack
             exit 1
           fi
+          
       - name: Configure AWS Credentials
         run: |
           aws configure set aws_access_key_id test
