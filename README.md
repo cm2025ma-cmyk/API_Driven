@@ -45,6 +45,8 @@ Conservez bien cette URL car vous en aurez besoin par la suite.
 
 Pour information : IL n'y a rien dans votre navigateur et c'est normal car il s'agit d'une API AWS (Pas un développement Web type UX).
 
+![alt text](image.png)
+
 ---------------------------------------------------
 Séquence 3 : Exercice
 ---------------------------------------------------
