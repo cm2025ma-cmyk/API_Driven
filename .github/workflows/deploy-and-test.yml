@@ -26,14 +26,24 @@ jobs:
           pip install localstack boto3 awscli-local
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Start LocalStack (Native Mode)
+            - name: Start LocalStack (Community Mode)
+        env:
+          ACTIVATE_PRO: "0"  # Force le mode gratuit pour éviter l'erreur de version
+          DEBUG: "1"
         run: |
-          echo "Démarrage de LocalStack (Mode Natif - Pro)..."
+          echo "🚀 Démarrage de LocalStack en mode Community..."
           
-          # Démarrer LocalStack en arrière-plan
-          localstack start -d
+          # Lancement explicite du container Docker
+          docker run -d \
+            --name localstack \
+            -p 4566:4566 \
+            -p 4510-4559:4510-4559 \
+            -e LOCALSTACK_API_KEY=${{ secrets.LOCALSTACK_API_KEY }} \
+            -e ACTIVATE_PRO=0 \
+            -e DEBUG=1 \
+            localstack/localstack:latest
           
-          # Attendre que LocalStack soit prêt
+          # Attente de la santé du service
           max_attempts=60
           attempt=0
           while [ $attempt -lt $max_attempts ]; do
@@ -48,8 +58,7 @@ jobs:
           
           if [ $attempt -eq $max_attempts ]; then
             echo "❌ Échec : LocalStack n'est pas prêt."
-            localstack logs --follow &
-            sleep 5
+            docker logs localstack
             exit 1
           fi
 
