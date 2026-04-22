@@ -28,7 +28,7 @@ jobs:
 
       - name: Start LocalStack (Native Mode)
         env:
-          ACTIVATE_PRO: "0"
+          LOCALSTACK_ACTIVATE_PRO: "0"
         run: |
           echo "Démarrage de LocalStack (Mode Natif - Pro)..."
           
@@ -36,7 +36,7 @@ jobs:
           localstack start -d
           
           # Attendre que LocalStack soit prêt
-          max_attempts=30
+          max_attempts=60
           attempt=0
           while [ $attempt -lt $max_attempts ]; do
             if curl -s http://localhost:4566/_localstack/health | grep -q '"running"'; then
