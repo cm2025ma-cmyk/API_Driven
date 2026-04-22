@@ -1,44 +1,28 @@
-      - name: Start LocalStack (Community Mode)
+      - name: Start LocalStack (Com edition)
         env:
-          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_API_KEY }} # Utilise le nom de ton secret
-          ACTIVATE_PRO: "0"
-          DEBUG: "1"
+          ACTIVATE_PRO: "0"  # Ajout crucial pour éviter l'erreur de licence
         run: |
-          echo "🚀 Démarrage de LocalStack..."
+          echo "Démarrage de LocalStack (Mode Natif - Pro)..."
           
-          # Lancement en arrière-plan (mode natif, pas de docker run manuel ici car LocalStack gère mieux ses dépendances)
-          # On utilise localstack start -d car c'est plus stable pour gérer les plugins internes
+          # Démarrer LocalStack en arrière-plan
           localstack start -d
           
-          # Attente robuste avec plus de temps
-          max_attempts=30
+          # Attendre que LocalStack soit prêt
+          max_attempts=30  # Légèrement augmenté de 15 à 30 pour plus de marge
           attempt=0
-          echo "En attente que LocalStack soit prêt (max ${max_attempts} tentatives)..."
-          
           while [ $attempt -lt $max_attempts ]; do
-            # On essaie de récupérer le JSON et on vérifie si le statut global est 'ready' ou 'running'
-            HEALTH_CHECK=$(curl -s http://localhost:4566/_localstack/health 2>/dev/null)
-            
-            if echo "$HEALTH_CHECK" | grep -q '"status": "ready"'; then
-              echo "✅ LocalStack est prêt (Status: ready) !"
-              break
-            elif echo "$HEALTH_CHECK" | grep -q '"running"'; then
-              echo "✅ LocalStack est prêt (Status: running) !"
+            if curl -s http://localhost:4566/_localstack/health | grep -q '"running"'; then
+              echo "✅ LocalStack est prêt !"
               break
             fi
-            
-            attempt=$((attempt+1))
-            if [ $((attempt % 10)) -eq 0 ]; then
-               echo "Tentative $attempt/$max_attempts : En attente... (Dernier log: $(tail -n 1 /proc/$(pgrep -f localstack)/cmdline 2>/dev/null || echo 'checking'))"
-            fi
+            echo "Tentative $((attempt+1))/$max_attempts : En attente..."
             sleep 3
+            attempt=$((attempt+1))
           done
           
           if [ $attempt -eq $max_attempts ]; then
-            echo "❌ Échec : LocalStack n'est pas prêt après ${max_attempts} tentatives."
-            echo "--- Derniers logs LocalStack ---"
-            localstack logs --tail 50
+            echo "❌ Échec : LocalStack n'est pas prêt."
+            localstack logs --follow &
+            sleep 5
             exit 1
           fi
-          
-          echo "✅ Vérification finale réussie."
